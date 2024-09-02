@@ -43,7 +43,7 @@ def test_rec(cfgs):
     module_b = []
     for state_dict in os.listdir(os.path.join(out_dir, "b")):
         model = get_model(network=network, mp=mp, ls=ls, img_size=img_size, mem_dim=mem_dim, shrink_thres=shrink_thres)
-        model.load_state_dict(torch.load(os.path.join(out_dir, "b", state_dict)))
+        model.load_state_dict(torch.load(os.path.join(out_dir, "b", state_dict), weights_only=True))
         model.eval()
         module_b.append(model)
 
@@ -131,6 +131,7 @@ def evaluate(cfgs):
     with torch.no_grad():
         y_true = []
         rec_err_l, inter_dis_l, intra_dis_l = [], [], []
+        comparison_based_labels = []
 
         for x, label, img_id in tqdm(test_loader):
             x = x.cuda()
@@ -151,6 +152,7 @@ def evaluate(cfgs):
                 b_rec = torch.cat([model(x)["output"].squeeze(0) for model in module_b])
             else:
                 raise Exception("Invalid Network")
+
             mu_a = torch.mean(a_rec, dim=0)  # h x w
             mu_b = torch.mean(b_rec, dim=0)  # h x w
 
@@ -172,11 +174,21 @@ def evaluate(cfgs):
 
             y_true.append(label.cpu().item())
 
+            # New logic for comparison-based classification
+            rec_err_a = torch.mean((x - mu_a) ** 2).item()
+            rec_err_b = torch.mean((x - mu_b) ** 2).item()
+
+            if rec_err_a > rec_err_b:
+                comparison_based_labels.append(0)  # Classified as normal
+            else:
+                comparison_based_labels.append(1)  # Classified as anomalous
+
         rec_err_l = np.array(rec_err_l)
         inter_dis_l = np.array(inter_dis_l)
         intra_dis_l = np.array(intra_dis_l)
 
         y_true = np.array(y_true)
+        comparison_based_labels = np.array(comparison_based_labels)
 
         rec_auc = metrics.roc_auc_score(y_true, rec_err_l)
         rec_ap = metrics.average_precision_score(y_true, rec_err_l)
@@ -187,9 +199,13 @@ def evaluate(cfgs):
         inter_auc = metrics.roc_auc_score(y_true, inter_dis_l)
         inter_ap = metrics.average_precision_score(y_true, inter_dis_l)
 
+        comparison_auc = metrics.roc_auc_score(y_true, comparison_based_labels)
+        comparison_ap = metrics.average_precision_score(y_true, comparison_based_labels)
+
         print('Rec. (ensemble)  auc:{:.3f}  ap:{:.3f}'.format(rec_auc, rec_ap))
         print('DDAD-intra       auc:{:.3f}  ap:{:.3f}'.format(intra_auc, intra_ap))
         print('DDAD-inter       auc:{:.3f}  ap:{:.3f}'.format(inter_auc, inter_ap))
+        print('Comparison-based auc:{:.3f}  ap:{:.3f}'.format(comparison_auc, comparison_ap))
 
         # Visualization
         intra_dis_l = (intra_dis_l - np.min(intra_dis_l)) / (np.max(intra_dis_l) - np.min(intra_dis_l))
